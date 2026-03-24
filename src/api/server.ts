@@ -33,7 +33,9 @@ async function start() {
     console.log(`🚀 API server running on port ${config.PORT}`);
   } catch (err) {
     app.log.error(err);
-    process.exit(1);
+    if (process.env.NODE_ENV !== 'test') {
+      process.exit(1); // only exit in real environment
+    }
   }
 }
 
