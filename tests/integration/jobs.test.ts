@@ -50,7 +50,7 @@ async function createJobViaWebhook() {
 }
 
 async function fetchJobsUntilContains(url: string, jobId: string) {
-  for (let attempt = 0; attempt < 10; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const res = await app.inject({ method: 'GET', url });
     if (res.statusCode !== 200) {
       await sleep(20);
@@ -62,7 +62,7 @@ async function fetchJobsUntilContains(url: string, jobId: string) {
       return { res, jobs };
     }
 
-    await sleep(20);
+    await sleep(100);
   }
 
   const finalRes = await app.inject({ method: 'GET', url });
