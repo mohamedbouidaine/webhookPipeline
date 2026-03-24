@@ -1,0 +1,54 @@
+version: '3.9'
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: webhook_pipeline
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Automatically runs on first startup when the volume is empty
+      - ./src/db/migrations/0001_initial.sql:/docker-entrypoint-initdb.d/0001_initial.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - '3000:3000'
+    environment:
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/webhook_pipeline
+      PORT: 3000
+      WORKER_POLL_INTERVAL: 2000
+      MAX_DELIVERY_ATTEMPTS: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/webhook_pipeline
+      PORT: 3000
+      WORKER_POLL_INTERVAL: 2000
+      MAX_DELIVERY_ATTEMPTS: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
