@@ -3,14 +3,13 @@ import Fastify, { FastifyInstance } from 'fastify';
 import { config } from '../config';
 import { errorHandler } from './middleware/error-handler';
 import { pipelineRoutes } from './routes/pipelines';
+import { webhookRoutes } from './routes/webhooks';
 
-// ── Handler functions ─────────────────────────────────────────────────────────
 
 function getHealthStatus() {
   return { status: 'ok', timestamp: new Date().toISOString() };
 }
 
-// ── App factory ───────────────────────────────────────────────────────────────
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({ logger: true });
@@ -18,16 +17,15 @@ export function buildApp(): FastifyInstance {
   app.setErrorHandler(errorHandler);
 
   app.get('/health', async (_request, reply) => {
-    const result = getHealthStatus();
-    return reply.status(200).send(result);
+    return reply.status(200).send(getHealthStatus());
   });
 
   app.register(pipelineRoutes);
+  app.register(webhookRoutes);
 
   return app;
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
 
 async function start() {
   const app = buildApp();
