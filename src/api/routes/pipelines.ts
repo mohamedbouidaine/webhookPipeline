@@ -11,6 +11,9 @@ import {
   dbUpdatePipeline,
 } from '../../db/queries/pipelines';
 
+import { validateActionConfig } from '../../actions';
+
+
 // ── Validation schemas ────────────────────────────────────────────────────────
 
 const CreatePipelineSchema = z.object({
@@ -53,6 +56,14 @@ async function handleCreatePipeline(request: FastifyRequest, reply: FastifyReply
   if (!parsed.success) {
     return reply.status(400).send({ error: 'Bad Request', details: parsed.error.flatten() });
   }
+try {
+  validateActionConfig(parsed.data.actionType, parsed.data.actionConfig);
+} catch (err) {
+  return reply.status(400).send({
+    error: 'Bad Request',
+    message: `Invalid action config: ${(err as Error).message}`,
+  });
+}
 
   const { name, actionType, actionConfig, subscribers } = parsed.data;
   const pipeline = await dbCreatePipeline({ name, actionType, actionConfig });

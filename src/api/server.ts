@@ -2,14 +2,13 @@ import 'dotenv/config';
 import Fastify, { FastifyInstance } from 'fastify';
 import { config } from '../config';
 import { errorHandler } from './middleware/error-handler';
+import { jobRoutes } from './routes/jobs';
 import { pipelineRoutes } from './routes/pipelines';
 import { webhookRoutes } from './routes/webhooks';
-
 
 function getHealthStatus() {
   return { status: 'ok', timestamp: new Date().toISOString() };
 }
-
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({ logger: true });
@@ -22,10 +21,10 @@ export function buildApp(): FastifyInstance {
 
   app.register(pipelineRoutes);
   app.register(webhookRoutes);
+  app.register(jobRoutes);
 
   return app;
 }
-
 
 async function start() {
   const app = buildApp();
