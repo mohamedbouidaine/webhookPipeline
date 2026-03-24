@@ -30,3 +30,23 @@ export async function dbGetDeliveriesByJobId(jobId: string) {
     .where(eq(deliveryAttempts.jobId, jobId))
     .orderBy(deliveryAttempts.createdAt);
 }
+export async function dbMarkJobCompleted(
+  id: string,
+  result: Record<string, unknown>
+) {
+  const rows = await db
+    .update(jobs)
+    .set({ status: 'completed', result, updatedAt: new Date(), completedAt: new Date() })
+    .where(eq(jobs.id, id))
+    .returning();
+  return rows[0];
+}
+
+export async function dbMarkJobFailed(id: string, error: string) {
+  const rows = await db
+    .update(jobs)
+    .set({ status: 'failed', error, updatedAt: new Date(), completedAt: new Date() })
+    .where(eq(jobs.id, id))
+    .returning();
+  return rows[0];
+}
