@@ -1,0 +1,39 @@
+{
+  "name": "webhook-pipeline",
+  "version": "1.0.0",
+  "description": "Webhook-driven task processing pipeline",
+  "scripts": {
+    "build": "tsc",
+    "db:migrate": "npx tsx src/db/migrate.ts",
+    "typecheck": "tsc --noEmit",
+    "dev:api": "tsx watch src/api/server.ts",
+    "dev:worker": "tsx watch src/worker/index.ts",
+    "start:api": "node dist/api/server.js",
+    "start:worker": "node dist/worker/index.js",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.30.0",
+    "fastify": "^5.8.4",
+    "mustache": "^4.2.0",
+    "pg": "^8.11.0",
+    "undici": "^6.6.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/mustache": "^4.2.0",
+    "@types/node": "^20.11.0",
+    "@types/pg": "^8.11.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "drizzle-kit": "^0.31.10",
+    "esbuild": "^0.27.4",
+    "eslint": "^8.56.0",
+    "tsx": "^4.7.0",
+    "typescript": "5.5",
+    "vitest": "^4.1.1"
+  }
+}
