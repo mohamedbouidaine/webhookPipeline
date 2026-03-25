@@ -1,12 +1,12 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { pipelines, pipelineSubscribers } from '../schema';
+import { Pipeline, pipelines, pipelineSubscribers } from '../schema';
 
 export async function dbGetAllPipelines() {
   return db.select().from(pipelines).orderBy(pipelines.createdAt);
 }
 
-export async function dbGetPipelineById(id: string) {
+export async function dbGetPipelineById(id: string): Promise<Pipeline | null> {
   const rows = await db.select().from(pipelines).where(eq(pipelines.id, id));
   return rows[0] ?? null;
 }

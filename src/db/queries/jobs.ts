@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '../client';
 import { deliveryAttempts, jobs } from '../schema';
+import { Job } from '../schema';
 
 export async function dbGetAllJobs(filters: {
   pipelineId?: string;
@@ -18,7 +19,7 @@ export async function dbGetAllJobs(filters: {
     .orderBy(jobs.createdAt);
 }
 
-export async function dbGetJobById(id: string) {
+export async function dbGetJobById(id: string): Promise<Job | null> {
   const rows = await db.select().from(jobs).where(eq(jobs.id, id));
   return rows[0] ?? null;
 }

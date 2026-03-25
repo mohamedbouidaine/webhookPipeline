@@ -57,6 +57,17 @@ WORKER_POLL_INTERVAL=2000
 MAX_DELIVERY_ATTEMPTS=5
 ```
 
+#### Environment variable reference
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | — | Full PostgreSQL connection URL. Both the API and the worker must point to the same database. |
+| `PORT` | No | `3000` | TCP port the API server listens on. Not used by the worker. |
+| `WORKER_POLL_INTERVAL` | No | `2000` | Milliseconds between worker polling ticks. Lower values reduce job latency but increase DB query frequency. |
+| `MAX_DELIVERY_ATTEMPTS` | No | `5` | Maximum number of HTTP delivery attempts per subscriber before a delivery is permanently marked `failed`. |
+
+> **Note:** `DATABASE_URL` must be a valid PostgreSQL connection URL (validated at startup). The process exits immediately if any required variable is missing or invalid.
+
 ### 3. Start PostgreSQL
 
 ```bash
@@ -65,11 +76,17 @@ docker compose up -d postgres
 
 ### 4. Ensure schema is applied
 
-The SQL migration is auto-mounted for first startup. You can also run the migration command explicitly (safe due to `IF NOT EXISTS`):
+The SQL migration (`src/db/migrations/0001_initial.sql`) is auto-mounted into the PostgreSQL container on first startup when the Docker volume is empty. It uses `CREATE TABLE IF NOT EXISTS` so it is safe to re-run.
+
+You can also apply it explicitly at any time:
 
 ```bash
 npm run db:migrate
 ```
+
+#### Applying schema changes after the initial migration
+
+If you add columns or tables, create a new numbered SQL file (e.g. `0002_add_column.sql`) and update `src/db/migrate.ts` to run it. Mount the new file in `docker-compose.yml` if you want it applied automatically to fresh containers.
 
 ## Run API and Worker
 
@@ -457,6 +474,34 @@ flowchart LR
    - failure: increment attempts and retry with exponential backoff
    - max attempts reached: mark `failed`
 
+## Delivery Retry Behavior
+
+When a delivery attempt fails (non-2xx response or network error), the worker schedules a retry using **exponential backoff**:
+
+```
+nextRetryAt = now + (2 ^ attemptCount) × BASE_DELAY_MS
+```
+
+Where `BASE_DELAY_MS = 5000` ms (5 seconds). Example schedule:
+
+| Attempt | Delay before next retry |
+|---|---|
+| 1st failure | 10 s |
+| 2nd failure | 20 s |
+| 3rd failure | 40 s |
+| 4th failure | 80 s |
+| `MAX_DELIVERY_ATTEMPTS` reached | Marked `failed` permanently — no further retries |
+
+Filtered jobs (where `conditional_filter` returns `{ filtered: true }`) are marked `completed` but no delivery attempts are created — subscribers are never notified.
+
+## sourceToken Security
+
+Each pipeline is assigned a random UUID `sourceToken` at creation time. This token is embedded in the webhook ingestion URL (`POST /webhooks/:token`) and acts as a shared secret between the webhook source and the pipeline.
+
+- Treat `sourceToken` values as secrets — anyone with the token can inject jobs into the pipeline.
+- If a token is compromised, delete and recreate the pipeline to generate a new token.
+- The token is intentionally simple (no HMAC signature verification). For production use, consider adding signature verification (e.g. `X-Hub-Signature-256`) as an additional layer.
+
 ## Key Design Decisions
 
 1. PostgreSQL-backed queue instead of in-memory queue
@@ -476,6 +521,76 @@ flowchart LR
 
 6. Strict input/config validation with zod
    - Reasoning: fail fast on malformed API payloads and action configs, reducing runtime ambiguity.
+
+## Operations
+
+### Worker crash recovery
+
+If the worker process crashes mid-tick, any jobs that were claimed and marked `processing` will remain in that state. The worker does **not** automatically reset them on restart.
+
+To recover stuck jobs, run:
+
+```sql
+UPDATE jobs SET status = 'pending', updated_at = now()
+WHERE status = 'processing';
+```
+
+Similarly, delivery attempts left in `pending` with a past `next_retry_at` will be retried automatically on the next worker tick — no manual intervention is needed for those.
+
+In Docker Compose, the worker has `restart: unless-stopped`, so it restarts automatically after a crash. Re-running the above SQL once after an unclean shutdown is sufficient to requeue stuck jobs.
+
+### Monitoring and observability
+
+All processing is logged to stdout using `console.log` / `console.error`. Key log patterns:
+
+| Log prefix | Meaning |
+|---|---|
+| `[processor] Processing job <id>` | Worker picked up a job |
+| `[processor] Job <id> filtered` | Job was filtered — no deliveries |
+| `[processor] Job <id> failed: ...` | Job processing error |
+| `[delivery] ✓ <url> — <status>` | Delivery succeeded |
+| `[delivery] ✗ <url> — retry in Xs` | Delivery failed, retry scheduled |
+| `[delivery] ✗ <url> — permanently failed` | Max attempts reached |
+
+To check job and delivery state, use the read-only API endpoints:
+
+```bash
+# List all failed jobs
+curl "http://localhost:3000/jobs?status=failed"
+
+# Check deliveries for a specific job
+curl "http://localhost:3000/jobs/<jobId>/deliveries"
+```
+
+## Troubleshooting
+
+### Jobs stuck in `processing` status
+
+This happens when the worker crashed or was killed mid-tick. Reset them using the SQL snippet in [Worker crash recovery](#worker-crash-recovery) above.
+
+### Deliveries permanently failing
+
+Check the `error` field on the delivery attempt:
+
+```bash
+curl "http://localhost:3000/jobs/<jobId>/deliveries"
+```
+
+Common causes:
+- Subscriber URL is unreachable or returns non-2xx responses consistently.
+- The subscriber took longer than 10 seconds to respond (request timeout).
+- DNS resolution failure for the subscriber URL.
+
+### API returns 400 on pipeline creation
+
+- Ensure `actionConfig` matches the selected `actionType` (e.g. `conditional_filter` requires at least one condition; `text_template` requires a non-empty `template` string).
+- Ensure all subscriber URLs are valid absolute URLs (e.g. `https://...`).
+
+### Worker not processing jobs
+
+- Check that `DATABASE_URL` is the same for both the API and the worker.
+- Verify the worker process is running (`docker compose ps`).
+- Confirm jobs exist in `pending` status via `GET /jobs?status=pending`.
 
 ## CI/CD
 

@@ -8,93 +8,92 @@ beforeAll(async () => { app = await setupTestApp(); });
 afterAll(async () => { await teardownTestApp(app); });
 beforeEach(async () => { await cleanDatabase(); });
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// Both pipeline creation and webhook ingestion are synchronous DB inserts,
+// so no polling or retries are needed here.
+async function createJobViaWebhook(pipelineName = `Job Test ${Date.now()}`) {
+  const pipelineRes = await app.inject({
+    method: 'POST',
+    url: '/pipelines',
+    payload: {
+      name: pipelineName,
+      actionType: 'json_transform',
+      actionConfig: { id: 'user.id' },
+      subscribers: ['https://example.com/hook'],
+    },
+  });
+  expect(pipelineRes.statusCode).toBe(201);
+  const pipeline = pipelineRes.json();
 
-async function createJobViaWebhook() {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const pipelineRes = await app.inject({
-      method: 'POST',
-      url: '/pipelines',
-      payload: {
-        name: `Job Test ${Date.now()}-${attempt}`,
-        actionType: 'json_transform',
-        actionConfig: { id: 'user.id' },
-        subscribers: ['https://example.com/hook'],
-      },
-    });
+  const webhookRes = await app.inject({
+    method: 'POST',
+    url: `/webhooks/${pipeline.sourceToken}`,
+    payload: { user: { id: 99 } },
+  });
+  expect(webhookRes.statusCode).toBe(202);
 
-    if (pipelineRes.statusCode !== 201) {
-      await sleep(20);
-      continue;
-    }
-
-    const pipeline = pipelineRes.json();
-
-    const webhookRes = await app.inject({
-      method: 'POST',
-      url: `/webhooks/${pipeline.sourceToken}`,
-      payload: { user: { id: 99 } },
-    });
-
-    if (webhookRes.statusCode === 202 && webhookRes.json().jobId) {
-      const webhook = webhookRes.json();
-      return { pipeline, jobId: webhook.jobId };
-    }
-
-    await sleep(20);
-  }
-
-  throw new Error('Failed to create job via webhook after retries');
-}
-
-async function fetchJobsUntilContains(url: string, jobId: string) {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const res = await app.inject({ method: 'GET', url });
-    if (res.statusCode !== 200) {
-      await sleep(20);
-      continue;
-    }
-
-    const jobs = res.json();
-    if (Array.isArray(jobs) && jobs.some((job) => job.id === jobId)) {
-      return { res, jobs };
-    }
-
-    await sleep(100);
-  }
-
-  const finalRes = await app.inject({ method: 'GET', url });
-  return { res: finalRes, jobs: finalRes.statusCode === 200 ? finalRes.json() : [] };
+  return { pipeline, jobId: webhookRes.json().jobId as string };
 }
 
 describe('GET /jobs', () => {
   it('returns all jobs', async () => {
     const { jobId } = await createJobViaWebhook();
-    const { res, jobs } = await fetchJobsUntilContains('/jobs', jobId);
+    const res = await app.inject({ method: 'GET', url: '/jobs' });
     expect(res.statusCode).toBe(200);
+    const jobs = res.json();
     expect(Array.isArray(jobs)).toBe(true);
-    expect(jobs.some((job: { id: string; status: string }) => job.id === jobId)).toBe(true);
+    expect(jobs.some((job: { id: string }) => job.id === jobId)).toBe(true);
   });
 
-  it('filters by status', async () => {
-    const { jobId } = await createJobViaWebhook();
-    const { res, jobs } = await fetchJobsUntilContains('/jobs?status=pending', jobId);
+  it('returns an empty array when there are no jobs', async () => {
+    const res = await app.inject({ method: 'GET', url: '/jobs' });
     expect(res.statusCode).toBe(200);
-    expect(Array.isArray(jobs)).toBe(true);
-    expect(
-      jobs.some((job: { id: string; status: string }) => job.id === jobId && job.status === 'pending')
-    ).toBe(true);
+    expect(res.json()).toEqual([]);
+  });
+
+  it('filters jobs by status=pending', async () => {
+    const { jobId } = await createJobViaWebhook();
+    const res = await app.inject({ method: 'GET', url: '/jobs?status=pending' });
+    expect(res.statusCode).toBe(200);
+    const jobs = res.json();
+    expect(jobs.some((job: { id: string; status: string }) => job.id === jobId && job.status === 'pending')).toBe(true);
+  });
+
+  it('filters jobs by pipeline_id', async () => {
+    const { pipeline, jobId } = await createJobViaWebhook('Pipeline A');
+    await createJobViaWebhook('Pipeline B'); // second pipeline, different id
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/jobs?pipeline_id=${pipeline.id}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const jobs = res.json();
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].id).toBe(jobId);
+  });
+
+  it('returns 400 for an invalid status filter value', async () => {
+    const res = await app.inject({ method: 'GET', url: '/jobs?status=invalid_status' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 for an invalid pipeline_id format', async () => {
+    const res = await app.inject({ method: 'GET', url: '/jobs?pipeline_id=not-a-uuid' });
+    expect(res.statusCode).toBe(400);
   });
 });
 
 describe('GET /jobs/:id', () => {
-  it('returns the job', async () => {
-    const { jobId } = await createJobViaWebhook();
+  it('returns the job with all expected fields', async () => {
+    const { jobId, pipeline } = await createJobViaWebhook();
     const res = await app.inject({ method: 'GET', url: `/jobs/${jobId}` });
     expect(res.statusCode).toBe(200);
-    expect(res.json().id).toBe(jobId);
+    const job = res.json();
+    expect(job.id).toBe(jobId);
+    expect(job.pipelineId).toBe(pipeline.id);
+    expect(job.status).toBe('pending');
+    expect(job.payload).toBeDefined();
+    expect(job.createdAt).toBeDefined();
   });
 
   it('returns 404 for unknown id', async () => {
@@ -104,10 +103,18 @@ describe('GET /jobs/:id', () => {
 });
 
 describe('GET /jobs/:id/deliveries', () => {
-  it('returns empty array for a new job', async () => {
+  it('returns empty array for a brand-new job (not yet processed by worker)', async () => {
     const { jobId } = await createJobViaWebhook();
     const res = await app.inject({ method: 'GET', url: `/jobs/${jobId}/deliveries` });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual([]);
+  });
+
+  it('returns 404 when the job does not exist', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/jobs/00000000-0000-0000-0000-000000000000/deliveries',
+    });
+    expect(res.statusCode).toBe(404);
   });
 });

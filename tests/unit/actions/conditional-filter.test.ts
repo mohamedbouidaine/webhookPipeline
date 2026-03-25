@@ -20,6 +20,15 @@ describe('conditional_filter', () => {
     it('rejects empty conditions array', () => {
       expect(() => validateConfig(config([]))).toThrow();
     });
+
+    it('rejects config with no conditions key', () => {
+      expect(() => validateConfig({})).toThrow();
+    });
+
+    it('rejects non-object config', () => {
+      expect(() => validateConfig('invalid')).toThrow();
+      expect(() => validateConfig(null)).toThrow();
+    });
   });
 
   describe('run', () => {
@@ -37,6 +46,15 @@ describe('conditional_filter', () => {
       expect(result).toMatchObject({ filtered: true });
     });
 
+    it('includes a reason string when filtered', () => {
+      const result = run(
+        { event: 'signup' },
+        config([{ field: 'event', operator: 'eq', value: 'purchase' }])
+      ) as { filtered: boolean; reason: string };
+      expect(result.reason).toContain('event');
+      expect(result.reason).toContain('eq');
+    });
+
     it('handles gt operator', () => {
       const pass = run({ amount: 200 }, config([{ field: 'amount', operator: 'gt', value: 100 }]));
       expect(pass).toMatchObject({ amount: 200 });
@@ -45,9 +63,28 @@ describe('conditional_filter', () => {
       expect(fail).toMatchObject({ filtered: true });
     });
 
+    it('handles lt operator', () => {
+      const pass = run({ amount: 50 }, config([{ field: 'amount', operator: 'lt', value: 100 }]));
+      expect(pass).toMatchObject({ amount: 50 });
+
+      const fail = run({ amount: 200 }, config([{ field: 'amount', operator: 'lt', value: 100 }]));
+      expect(fail).toMatchObject({ filtered: true });
+    });
+
+    it('handles neq operator', () => {
+      const pass = run({ status: 'active' }, config([{ field: 'status', operator: 'neq', value: 'inactive' }]));
+      expect(pass).toMatchObject({ status: 'active' });
+
+      const fail = run({ status: 'inactive' }, config([{ field: 'status', operator: 'neq', value: 'inactive' }]));
+      expect(fail).toMatchObject({ filtered: true });
+    });
+
     it('handles contains operator', () => {
       const pass = run({ tag: 'vip-user' }, config([{ field: 'tag', operator: 'contains', value: 'vip' }]));
       expect(pass).toMatchObject({ tag: 'vip-user' });
+
+      const fail = run({ tag: 'regular-user' }, config([{ field: 'tag', operator: 'contains', value: 'vip' }]));
+      expect(fail).toMatchObject({ filtered: true });
     });
 
     it('handles exists operator', () => {
@@ -58,7 +95,31 @@ describe('conditional_filter', () => {
       expect(fail).toMatchObject({ filtered: true });
     });
 
-    it('fails if ANY condition fails', () => {
+    it('treats null field value as non-existent for exists operator', () => {
+      const result = run({ email: null }, config([{ field: 'email', operator: 'exists' }]));
+      expect(result).toMatchObject({ filtered: true });
+    });
+
+    it('handles nested field paths', () => {
+      const pass = run(
+        { user: { role: 'admin' } },
+        config([{ field: 'user.role', operator: 'eq', value: 'admin' }])
+      );
+      expect(pass).toMatchObject({ user: { role: 'admin' } });
+
+      const fail = run(
+        { user: { role: 'viewer' } },
+        config([{ field: 'user.role', operator: 'eq', value: 'admin' }])
+      );
+      expect(fail).toMatchObject({ filtered: true });
+    });
+
+    it('treats non-numeric values as failing gt/lt operator', () => {
+      const result = run({ amount: 'big' }, config([{ field: 'amount', operator: 'gt', value: 0 }]));
+      expect(result).toMatchObject({ filtered: true });
+    });
+
+    it('fails if ANY condition fails (short-circuits on first failure)', () => {
       const result = run(
         { event: 'purchase', amount: 50 },
         config([
@@ -67,6 +128,19 @@ describe('conditional_filter', () => {
         ])
       );
       expect(result).toMatchObject({ filtered: true });
+    });
+
+    it('passes when all multiple conditions match', () => {
+      const payload = { event: 'purchase', amount: 200, tag: 'vip-user' };
+      const result = run(
+        payload,
+        config([
+          { field: 'event', operator: 'eq', value: 'purchase' },
+          { field: 'amount', operator: 'gt', value: 100 },
+          { field: 'tag', operator: 'contains', value: 'vip' },
+        ])
+      );
+      expect(result).toEqual(payload);
     });
   });
 });

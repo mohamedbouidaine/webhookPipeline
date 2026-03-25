@@ -1,3 +1,4 @@
+import { InferSelectModel } from 'drizzle-orm';
 import { pgTable, uuid, text, jsonb, timestamp, integer } from 'drizzle-orm/pg-core';
 
 export const pipelines = pgTable('pipelines', {
@@ -42,3 +43,6 @@ export const deliveryAttempts = pgTable('delivery_attempts', {
   createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:      timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export type Job = InferSelectModel<typeof jobs>;
+export type Pipeline = InferSelectModel<typeof pipelines>;
